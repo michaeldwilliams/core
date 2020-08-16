@@ -59,6 +59,8 @@ CONFIG_SCHEMA = vol.Schema(
     extra=vol.ALLOW_EXTRA,
 )
 
+PLATFORMS = ["sensor", "switch"]
+
 
 def setup(hass, config):
     """Set up the NZBGet sensors."""
@@ -117,6 +119,70 @@ def setup(hass, config):
     hass.helpers.discovery.load_platform("sensor", DOMAIN, sensorconfig, config)
 
     return True
+
+
+async def async_setup_entry(hass: HomeAssistantType, entry: ConfigEntry) -> bool:
+    """Set up NZBGet from a config entry."""
+    if not entry.options:
+        options = {
+            CONF_SCAN_INTERVAL: entry.data.get(
+                CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL
+            ),
+        }
+        hass.config_entries.async_update_entry(entry, options=options)
+
+    nzbget_api = pynzbgetapi.NZBGetAPI(
+        data[CONF_HOST],
+        data[CONF_USERNAME],
+        data[CONF_PASSWORD],
+        data[CONF_SSL],
+        data[CONF_VERIFY_SSL],
+        data[CONF_PORT],
+    )
+
+    try:
+        await hass.async_add_executor_job(nzbget_api.version)
+    except pynzbgetapi.NZBGetAPIException as error:
+        raise ConfigEntryNotReady from error
+
+    nzbget_data = NZBGetData(hass, nzbget_api)
+
+    undo_listener = entry.add_update_listener(_async_update_listener)
+
+    hass.data[DOMAIN][entry.entry_id] = {
+        DATA_NZBGET: nzbget_data,
+        DATA_UNDO_UPDATE_LISTENER: undo_listener,
+    }
+
+    for component in PLATFORMS:
+        hass.async_create_task(
+            hass.config_entries.async_forward_entry_setup(entry, component)
+        )
+
+    return True
+
+
+async def async_unload_entry(hass: HomeAssistantType, entry: ConfigEntry) -> bool:
+    """Unload a config entry."""
+    unload_ok = all(
+        await asyncio.gather(
+            *[
+                hass.config_entries.async_forward_entry_unload(entry, component)
+                for component in PLATFORMS
+            ]
+        )
+    )
+
+    if unload_ok:
+        hass.data[DOMAIN][entry.entry_id][DATA_UNDO_UPDATE_LISTENER]()
+        hass.data[DOMAIN].pop(entry.entry_id)
+
+    return unload_ok
+
+
+async def _async_update_listener(hass: HomeAssistantType, entry: ConfigEntry) -> None:
+    """Handle options update."""
+    
 
 
 class NZBGetData:
