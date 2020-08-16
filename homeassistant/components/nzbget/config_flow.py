@@ -28,8 +28,6 @@ from .const import (
 )
 from .const import DOMAIN  # pylint: disable=unused-import
 
-DEFAULT_SCAN_INTERVAL = timedelta(seconds=5)
-
 _LOGGER = logging.getLogger(__name__)
 
 
