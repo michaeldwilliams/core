@@ -832,6 +832,9 @@ konnected==1.2.0
 # homeassistant.components.eufy
 lakeside==0.12
 
+# homeassistant.components.c_by_ge
+laurel==0.3
+
 # homeassistant.components.dyson
 libpurecool==0.6.3
 

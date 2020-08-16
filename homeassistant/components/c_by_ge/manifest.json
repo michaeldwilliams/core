@@ -1,0 +1,8 @@
+{
+  "domain": "c_by_ge",
+  "name": "C By GE",
+  "documentation": "https://www.example.com",
+  "dependencies": [],
+  "codeowners": ["michaelldwilliams"],
+  "requirements": ["laurel==0.3"]
+}
