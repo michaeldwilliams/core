@@ -1,5 +1,4 @@
 """Config flow for NZBGet."""
-from datetime import timedelta
 import logging
 from typing import Any, Dict, Optional
 
