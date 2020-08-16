@@ -14,9 +14,11 @@ from homeassistant.const import (
     CONF_SSL,
     CONF_USERNAME,
 )
+from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.dispatcher import dispatcher_send
 from homeassistant.helpers.event import track_time_interval
+from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -57,6 +59,13 @@ CONFIG_SCHEMA = vol.Schema(
         )
     },
     extra=vol.ALLOW_EXTRA,
+)
+
+from .const import (
+    DATA_COORDINATOR,
+    DATA_UNDO_UPDATE_LISTENER,
+    DEFAULT_SCAN_INTERVAL,
+    DOMAIN,
 )
 
 PLATFORMS = ["sensor", "switch"]
@@ -131,26 +140,17 @@ async def async_setup_entry(hass: HomeAssistantType, entry: ConfigEntry) -> bool
         }
         hass.config_entries.async_update_entry(entry, options=options)
 
-    nzbget_api = pynzbgetapi.NZBGetAPI(
-        data[CONF_HOST],
-        data[CONF_USERNAME],
-        data[CONF_PASSWORD],
-        data[CONF_SSL],
-        data[CONF_VERIFY_SSL],
-        data[CONF_PORT],
-    )
+    coordinator = NZBGetDataUpdateCoordinator(hass, entry.data)
 
-    try:
-        await hass.async_add_executor_job(nzbget_api.version)
-    except pynzbgetapi.NZBGetAPIException as error:
-        raise ConfigEntryNotReady from error
+    await coordinator.async_refresh()
 
-    nzbget_data = NZBGetData(hass, nzbget_api)
+    if not coordinator.last_update_success:
+        raise ConfigEntryNotReady
 
     undo_listener = entry.add_update_listener(_async_update_listener)
 
     hass.data[DOMAIN][entry.entry_id] = {
-        DATA_NZBGET: nzbget_data,
+        DATA_COORDINATOR: coordinator,
         DATA_UNDO_UPDATE_LISTENER: undo_listener,
     }
 
@@ -182,7 +182,6 @@ async def async_unload_entry(hass: HomeAssistantType, entry: ConfigEntry) -> boo
 
 async def _async_update_listener(hass: HomeAssistantType, entry: ConfigEntry) -> None:
     """Handle options update."""
-    
 
 
 class NZBGetData:
@@ -262,3 +261,67 @@ class NZBGetData:
                 _LOGGER.error("Limit was out of range")
         except pynzbgetapi.NZBGetAPIException as err:
             _LOGGER.error("Unable to set download speed: %s", err)
+
+
+class NZBGetDataUpdateCoordinator(DataUpdateCoordinator[Device]):
+    """Class to manage fetching NZBGet data."""
+
+    def __init__(
+        self, hass: HomeAssistantType, *, config: dict,
+    ):
+        """Initialize global NZBGet data updater."""
+        self.nzbget = npynzbgetapi.NZBGetAPI(
+            config[CONF_HOST],
+            config[CONF_USERNAME],
+            config[CONF_PASSWORD],
+            config[CONF_SSL],
+            config[CONF_VERIFY_SSL],
+            config[CONF_PORT],
+        )
+
+        self._completed_downloads_init = False
+        self._completed_downloads = {}
+
+        super().__init__(
+            hass, _LOGGER, name=DOMAIN, update_interval=config[CONF_SCAN_INTERVAL],
+        )
+
+    def _check_completed_downloads(self, history):
+        """Check history for newly completed downloads."""
+        actual_completed_downloads = {
+            (x["Name"], x["Category"], x["Status"]) for x in history
+        }
+
+        if self._completed_downloads_init:
+            tmp_completed_downloads = list(
+                actual_completed_downloads.difference(self._completed_downloads)
+            )
+
+            for download in tmp_completed_downloads:
+                self.hass.bus.fire(
+                    "nzbget_download_complete",
+                    {"name": download[0], "category": download[1], "status": download[2]},
+                )
+
+        self._completed_downloads = actual_completed_downloads
+        self._completed_downloads_init = True
+
+    def _update_data(self) -> dict:
+        """Fetch data from NZBGet via sync functions."""
+        status = self.nzbget.status()
+        history = self.nzbget.history()
+
+        self._check_completed_downloads(history)
+
+        return {
+            "status": status,
+            "downloads": history,
+        }
+
+    async def _async_update_data(self) -> dict:
+        """Fetch data from NZBGet."""
+        try:
+            data = await hass.async_add_executor_job(self._update_data)
+            return data
+        except pynzbgetapi.NZBGetAPIException as error:
+            raise UpdateFailed(f"Invalid response from API: {error}")
